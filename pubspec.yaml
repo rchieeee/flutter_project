@@ -43,6 +43,16 @@ dependencies:
   # Utilities
   intl: ^0.19.0
 
+  # SQLite — offline-first local database
+  sqflite: ^2.3.3
+  sqflite_common_ffi_web: ^0.4.5+1
+  path_provider: ^2.1.4
+  path: ^1.9.0
+
+  # Connectivity detection (online/offline check)
+  connectivity_plus: ^6.1.4
+  provider: ^6.1.5+1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
