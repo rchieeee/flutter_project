@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:sqflite/sqflite.dart';
-import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
 import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
 
@@ -16,12 +14,7 @@ void main() async {
   try {
     WidgetsFlutterBinding.ensureInitialized();
 
-    // 1. Set up sqflite for web (WASM) before opening any database
-    if (kIsWeb) {
-      databaseFactory = databaseFactoryFfiWeb;
-    }
-
-    // 2. Initialise SQLite (creates/opens the local .db file)
+    // 1. Initialise local database (SQLite for Android, In-Memory for Web UI testing)
     await DatabaseHelper.initialise();
 
     // 3. Initialise Firebase

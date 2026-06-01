@@ -45,7 +45,6 @@ dependencies:
 
   # SQLite — offline-first local database
   sqflite: ^2.3.3
-  sqflite_common_ffi_web: ^0.4.5+1
   path_provider: ^2.1.4
   path: ^1.9.0
 

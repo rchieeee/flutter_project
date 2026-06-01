@@ -1,50 +1,43 @@
 import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
-import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 
 import '../models/todo.dart';
 
-/// SQLite database helper — works on Android (native) and Web (WASM via
-/// sqflite_common_ffi_web). All TODO operations go through this class so that
-/// offline changes persist locally before being synced to Firebase.
+/// Database helper that uses REAL SQLite for Android/iOS,
+/// and an IN-MEMORY list for Web (Chrome) strictly for UI testing.
+/// This prevents any WASM/Web Worker crashes on localhost.
 class DatabaseHelper {
   static Database? _db;
 
+  // ── IN-MEMORY MOCK FOR WEB UI TESTING ─────────────────────────────────────
+  static final List<Map<String, dynamic>> _webMemoryDb = [];
+
   // ── Initialise ────────────────────────────────────────────────────────────
 
-  /// Call once at app startup (before runApp).
   static Future<void> initialise() async {
     if (kIsWeb) {
-      databaseFactory = databaseFactoryFfiWeb;
+      // In web, we do nothing to initialize because we just use _webMemoryDb
+      return;
     }
     _db ??= await _open();
   }
 
   static Future<Database> get _database async {
+    if (kIsWeb) throw UnsupportedError('SQLite is disabled on Web for testing.');
     _db ??= await _open();
     return _db!;
   }
 
   static Future<Database> _open() async {
-    if (kIsWeb) {
-      return openDatabase(
-        'boiser_todos.db',
-        version: 1,
-        onCreate: _onCreate,
-        onUpgrade: _onUpgrade,
-      );
-    } else {
-      final dir = await getApplicationDocumentsDirectory();
-      final path = p.join(dir.path, 'boiser_todos.db');
-      return openDatabase(
-        path,
-        version: 1,
-        onCreate: _onCreate,
-        onUpgrade: _onUpgrade,
-      );
-    }
+    final dir = await getApplicationDocumentsDirectory();
+    final path = p.join(dir.path, 'boiser_todos.db');
+    return openDatabase(
+      path,
+      version: 1,
+      onCreate: _onCreate,
+    );
   }
 
   static Future<void> _onCreate(Database db, int version) async {
@@ -66,21 +59,30 @@ class DatabaseHelper {
     ''');
   }
 
-  static Future<void> _onUpgrade(Database db, int oldV, int newV) async {
-    // Future migrations go here
-  }
-
   // ── INSERT ────────────────────────────────────────────────────────────────
 
   static Future<void> insertTodo(Map<String, dynamic> data) async {
+    if (kIsWeb) {
+      // If it exists, replace it
+      _webMemoryDb.removeWhere((row) => row['id'] == data['id']);
+      _webMemoryDb.add(Map<String, dynamic>.from(data));
+      return;
+    }
     final db = await _database;
     await db.insert('todos', data, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   // ── READ ──────────────────────────────────────────────────────────────────
 
-  /// All non-deleted, non-pending-delete todos for this user.
   static Future<List<Map<String, dynamic>>> getTodos(String userId) async {
+    if (kIsWeb) {
+      final rows = _webMemoryDb.where((r) {
+        return (r['user_id'] == userId && r['pending_action'] != 'delete') ||
+               (r['user_id'] == userId && r['pending_action'] == null);
+      }).toList();
+      rows.sort((a, b) => (b['created_at'] as int).compareTo(a['created_at'] as int));
+      return rows.map((r) => Map<String, dynamic>.from(r)).toList();
+    }
     final db = await _database;
     return db.query(
       'todos',
@@ -90,8 +92,12 @@ class DatabaseHelper {
     );
   }
 
-  /// All todos regardless of state (used during sync).
   static Future<List<Map<String, dynamic>>> getAllTodosRaw(String userId) async {
+    if (kIsWeb) {
+      final rows = _webMemoryDb.where((r) => r['user_id'] == userId).toList();
+      rows.sort((a, b) => (b['created_at'] as int).compareTo(a['created_at'] as int));
+      return rows.map((r) => Map<String, dynamic>.from(r)).toList();
+    }
     final db = await _database;
     return db.query(
       'todos',
@@ -101,8 +107,13 @@ class DatabaseHelper {
     );
   }
 
-  /// Only rows that need syncing to Firebase.
   static Future<List<Map<String, dynamic>>> getPendingSyncTodos(String userId) async {
+    if (kIsWeb) {
+      return _webMemoryDb
+          .where((r) => r['user_id'] == userId && r['pending_sync'] == 1)
+          .map((r) => Map<String, dynamic>.from(r))
+          .toList();
+    }
     final db = await _database;
     return db.query(
       'todos',
@@ -114,12 +125,29 @@ class DatabaseHelper {
   // ── UPDATE ────────────────────────────────────────────────────────────────
 
   static Future<void> updateTodo(String id, Map<String, dynamic> data) async {
+    if (kIsWeb) {
+      final index = _webMemoryDb.indexWhere((r) => r['id'] == id);
+      if (index != -1) {
+        final existing = _webMemoryDb[index];
+        data.forEach((key, value) {
+          existing[key] = value;
+        });
+      }
+      return;
+    }
     final db = await _database;
     await db.update('todos', data, where: 'id = ?', whereArgs: [id]);
   }
 
-  /// Mark a row as fully synced (no pending action).
   static Future<void> markSynced(String id) async {
+    if (kIsWeb) {
+      final index = _webMemoryDb.indexWhere((r) => r['id'] == id);
+      if (index != -1) {
+        _webMemoryDb[index]['pending_sync'] = 0;
+        _webMemoryDb[index]['pending_action'] = null;
+      }
+      return;
+    }
     final db = await _database;
     await db.update(
       'todos',
@@ -129,8 +157,16 @@ class DatabaseHelper {
     );
   }
 
-  /// After a Firebase add, update the local row id to the real Firestore id.
   static Future<void> updateLocalId(String oldId, String newId) async {
+    if (kIsWeb) {
+      final index = _webMemoryDb.indexWhere((r) => r['id'] == oldId);
+      if (index != -1) {
+        _webMemoryDb[index]['id'] = newId;
+        _webMemoryDb[index]['pending_sync'] = 0;
+        _webMemoryDb[index]['pending_action'] = null;
+      }
+      return;
+    }
     final db = await _database;
     await db.execute(
       'UPDATE todos SET id = ?, pending_sync = 0, pending_action = NULL WHERE id = ?',
@@ -141,13 +177,16 @@ class DatabaseHelper {
   // ── DELETE ────────────────────────────────────────────────────────────────
 
   static Future<void> deleteTodo(String id) async {
+    if (kIsWeb) {
+      _webMemoryDb.removeWhere((r) => r['id'] == id);
+      return;
+    }
     final db = await _database;
     await db.delete('todos', where: 'id = ?', whereArgs: [id]);
   }
 
   // ── HELPERS ───────────────────────────────────────────────────────────────
 
-  /// Convert a DB row map back to a [Todo] model.
   static Todo rowToTodo(Map<String, dynamic> row) {
     return Todo(
       id: row['id'] as String,
@@ -165,7 +204,6 @@ class DatabaseHelper {
     );
   }
 
-  /// Convert a [Todo] to a row map.
   static Map<String, dynamic> todoToRow(
     Todo todo, {
     required String userId,
